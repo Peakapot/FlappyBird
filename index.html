@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flappy Bird: Neon Vegas</title>
+  <style>
+    :root {
+      --bg-night: #140b2d;
+      --neon-pink: #ff3ea5;
+      --neon-cyan: #3ef3ff;
+      --neon-gold: #ffcb3d;
+      --text: #f5f7ff;
+      --shadow: rgba(0, 0, 0, 0.35);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top, #28114d 0%, #120821 45%, #0a0513 100%);
+      color: var(--text);
+    }
+
+    .game-shell {
+      width: min(95vw, 980px);
+      position: relative;
+    }
+
+    canvas {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      border: 4px solid #fff;
+      border-radius: 16px;
+      box-shadow: 0 20px 55px var(--shadow);
+      background: linear-gradient(to bottom, #1e1041 0%, #140b2d 58%, #0e0724 100%);
+      display: block;
+    }
+
+    .hud {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      padding: 16px;
+      font-weight: 700;
+      text-shadow: 0 2px 6px var(--shadow);
+    }
+
+    .pill {
+      background: rgba(8, 6, 22, 0.6);
+      border: 2px solid rgba(255, 255, 255, 0.15);
+      border-radius: 999px;
+      padding: 8px 14px;
+      backdrop-filter: blur(4px);
+    }
+
+    .center-msg {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 1rem;
+      pointer-events: none;
+    }
+
+    .card {
+      background: rgba(10, 8, 25, 0.75);
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      border-radius: 14px;
+      padding: 14px 18px;
+      max-width: 560px;
+      line-height: 1.35;
+      text-shadow: 0 2px 6px var(--shadow);
+    }
+
+    kbd {
+      border: 1px solid rgba(255, 255, 255, 0.4);
+      border-bottom-width: 2px;
+      border-radius: 6px;
+      padding: 0 0.45rem;
+      background: rgba(255, 255, 255, 0.08);
+    }
+  </style>
+</head>
+<body>
+  <main class="game-shell">
+    <canvas id="game" width="960" height="540" aria-label="Flappy Bird Neon Vegas Game"></canvas>
+    <div class="hud">
+      <div class="pill" id="distance">Distance: 0 m</div>
+      <div class="pill" id="difficulty">Difficulty: 1.0x</div>
+    </div>
+    <div class="center-msg" id="overlay">
+      <div class="card" id="overlayCard">
+        <h2>Flappy Bird: Neon Vegas</h2>
+        <p>Tap <kbd>Space</kbd> / click / tap to flap. Fly the cowboy-hat bird through neon Vegas obstacles.</p>
+        <p>Distance is your score. The Strip gets faster and tighter over time.</p>
+        <p><strong>Press Space to start.</strong></p>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const overlay = document.getElementById("overlay");
+    const overlayCard = document.getElementById("overlayCard");
+    const distanceEl = document.getElementById("distance");
+    const difficultyEl = document.getElementById("difficulty");
+
+    const WORLD_SPEED = 250;
+    const GRAVITY = 1200;
+    const FLAP_POWER = -420;
+    const SPAWN_INTERVAL = 1.55;
+    const FLOOR_HEIGHT = 95;
+
+    let gameState = "ready";
+    let elapsed = 0;
+    let spawnTimer = 0;
+    let scoreDistance = 0;
+
+    const bird = {
+      x: 220,
+      y: canvas.height / 2,
+      vy: 0,
+      radius: 22,
+      tilt: 0
+    };
+
+    const parallax = {
+      skylineOffset: 0,
+      roadOffset: 0,
+      stars: Array.from({ length: 70 }, () => ({
+        x: Math.random() * canvas.width,
+        y: Math.random() * (canvas.height * 0.6),
+        r: Math.random() * 1.8 + 0.4,
+        twinkle: Math.random() * Math.PI * 2
+      }))
+    };
+
+    const obstacles = [];
+
+    function resetGame() {
+      gameState = "ready";
+      elapsed = 0;
+      spawnTimer = 0;
+      scoreDistance = 0;
+      bird.y = canvas.height / 2;
+      bird.vy = 0;
+      bird.tilt = 0;
+      obstacles.length = 0;
+      overlay.style.display = "grid";
+      overlayCard.innerHTML = `
+        <h2>Flappy Bird: Neon Vegas</h2>
+        <p>Tap <kbd>Space</kbd> / click / tap to flap. Fly the cowboy-hat bird through neon Vegas obstacles.</p>
+        <p>Distance is your score. The Strip gets faster and tighter over time.</p>
+        <p><strong>Press Space to start.</strong></p>
+      `;
+      updateHUD();
+    }
+
+    function currentDifficulty() {
+      return 1 + Math.min(1.9, elapsed * 0.06);
+    }
+
+    function flap() {
+      if (gameState === "ready") {
+        gameState = "playing";
+        overlay.style.display = "none";
+      }
+      if (gameState === "playing") {
+        bird.vy = FLAP_POWER;
+      } else if (gameState === "gameover") {
+        resetGame();
+      }
+    }
+
+    function spawnObstacle() {
+      const difficulty = currentDifficulty();
+      const gapBase = 205;
+      const gap = Math.max(124, gapBase - difficulty * 20);
+      const safeTop = 50;
+      const safeBottom = canvas.height - FLOOR_HEIGHT - 50 - gap;
+      const gapY = safeTop + Math.random() * Math.max(10, safeBottom - safeTop);
+      const width = 88;
+      const typePool = ["slot", "sign", "fountain"];
+      const type = typePool[Math.floor(Math.random() * typePool.length)];
+
+      obstacles.push({
+        x: canvas.width + width,
+        width,
+        gapY,
+        gap,
+        passed: false,
+        type
+      });
+    }
+
+    function rectCircleColliding(circle, rect) {
+      const distX = Math.abs(circle.x - rect.x - rect.w / 2);
+      const distY = Math.abs(circle.y - rect.y - rect.h / 2);
+
+      if (distX > (rect.w / 2 + circle.radius)) return false;
+      if (distY > (rect.h / 2 + circle.radius)) return false;
+      if (distX <= rect.w / 2) return true;
+      if (distY <= rect.h / 2) return true;
+
+      const dx = distX - rect.w / 2;
+      const dy = distY - rect.h / 2;
+      return (dx * dx + dy * dy <= (circle.radius * circle.radius));
+    }
+
+    function endGame() {
+      if (gameState !== "playing") return;
+      gameState = "gameover";
+      overlay.style.display = "grid";
+      overlayCard.innerHTML = `
+        <h2>Crash on the Strip!</h2>
+        <p><strong>Final distance: ${Math.floor(scoreDistance)} meters</strong></p>
+        <p>Press <kbd>Space</kbd> or click to play again.</p>
+      `;
+    }
+
+    function update(dt) {
+      if (gameState !== "playing") return;
+
+      elapsed += dt;
+      const difficulty = currentDifficulty();
+      const speed = WORLD_SPEED * difficulty;
+
+      bird.vy += GRAVITY * dt;
+      bird.y += bird.vy * dt;
+      bird.tilt = Math.max(-0.6, Math.min(1.1, bird.vy / 480));
+
+      spawnTimer += dt;
+      const adjustedSpawn = Math.max(0.85, SPAWN_INTERVAL - difficulty * 0.2);
+      if (spawnTimer >= adjustedSpawn) {
+        spawnTimer = 0;
+        spawnObstacle();
+      }
+
+      scoreDistance += (speed * dt) * 0.09;
+
+      parallax.skylineOffset -= speed * dt * 0.25;
+      parallax.roadOffset -= speed * dt * 0.9;
+
+      for (const obs of obstacles) {
+        obs.x -= speed * dt;
+
+        if (!obs.passed && obs.x + obs.width < bird.x) {
+          obs.passed = true;
+        }
+
+        const topRect = { x: obs.x, y: 0, w: obs.width, h: obs.gapY };
+        const bottomRect = {
+          x: obs.x,
+          y: obs.gapY + obs.gap,
+          w: obs.width,
+          h: canvas.height - FLOOR_HEIGHT - (obs.gapY + obs.gap)
+        };
+
+        if (rectCircleColliding(bird, topRect) || rectCircleColliding(bird, bottomRect)) {
+          endGame();
+        }
+      }
+
+      while (obstacles.length && obstacles[0].x + obstacles[0].width < -50) {
+        obstacles.shift();
+      }
+
+      if (bird.y + bird.radius >= canvas.height - FLOOR_HEIGHT || bird.y - bird.radius <= 0) {
+        endGame();
+      }
+
+      updateHUD();
+    }
+
+    function updateHUD() {
+      distanceEl.textContent = `Distance: ${Math.floor(scoreDistance)} m`;
+      difficultyEl.textContent = `Difficulty: ${currentDifficulty().toFixed(1)}x`;
+    }
+
+    function drawBackground() {
+      const h = canvas.height;
+      const w = canvas.width;
+
+      const sky = ctx.createLinearGradient(0, 0, 0, h);
+      sky.addColorStop(0, "#2b1558");
+      sky.addColorStop(0.55, "#1a0d38");
+      sky.addColorStop(1, "#120728");
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, w, h);
+
+      for (const star of parallax.stars) {
+        const sparkle = 0.45 + 0.55 * Math.sin(elapsed * 3 + star.twinkle);
+        ctx.fillStyle = `rgba(255,255,255,${sparkle})`;
+        ctx.beginPath();
+        ctx.arc(star.x, star.y, star.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      drawSkyline();
+      drawRoad();
+    }
+
+    function drawSkyline() {
+      const h = canvas.height;
+      const y = h * 0.52;
+      const speedOffset = ((parallax.skylineOffset % 360) + 360) % 360;
+
+      for (let i = -1; i < 8; i++) {
+        const baseX = i * 180 - speedOffset;
+        const bH = 90 + (i % 3) * 32;
+
+        ctx.fillStyle = "#100a24";
+        ctx.fillRect(baseX + 24, y - bH, 120, bH);
+
+        ctx.fillStyle = "#23114d";
+        ctx.fillRect(baseX + 8, y - bH * 0.8, 36, bH * 0.8);
+
+        ctx.fillStyle = "#ff4db2";
+        ctx.fillRect(baseX + 54, y - bH - 8, 56, 10);
+
+        ctx.fillStyle = "#43f2ff";
+        ctx.font = "14px Trebuchet MS";
+        ctx.fillText("VEGAS", baseX + 58, y - bH + 18);
+
+        for (let wx = 0; wx < 6; wx++) {
+          for (let wy = 0; wy < Math.floor(bH / 18); wy++) {
+            if (Math.random() < 0.08) continue;
+            ctx.fillStyle = wy % 2 === 0 ? "#ffd06a" : "#ff7ad7";
+            ctx.fillRect(baseX + 30 + wx * 16, y - bH + 10 + wy * 14, 6, 8);
+          }
+        }
+      }
+    }
+
+    function drawRoad() {
+      const h = canvas.height;
+      const y = h - FLOOR_HEIGHT;
+
+      const roadGrad = ctx.createLinearGradient(0, y, 0, h);
+      roadGrad.addColorStop(0, "#2a184f");
+      roadGrad.addColorStop(1, "#180c30");
+      ctx.fillStyle = roadGrad;
+      ctx.fillRect(0, y, canvas.width, FLOOR_HEIGHT);
+
+      ctx.fillStyle = "#ff3ea5";
+      ctx.fillRect(0, y, canvas.width, 4);
+
+      const offset = ((parallax.roadOffset % 80) + 80) % 80;
+      ctx.fillStyle = "#ffd04e";
+      for (let x = -80; x < canvas.width + 80; x += 80) {
+        ctx.fillRect(x - offset + 15, y + FLOOR_HEIGHT * 0.52, 34, 6);
+      }
+    }
+
+    function drawObstacle(obs) {
+      const topHeight = obs.gapY;
+      const bottomY = obs.gapY + obs.gap;
+      const bottomHeight = canvas.height - FLOOR_HEIGHT - bottomY;
+
+      drawVegasBlock(obs.x, 0, obs.width, topHeight, obs.type, true);
+      drawVegasBlock(obs.x, bottomY, obs.width, bottomHeight, obs.type, false);
+
+      ctx.fillStyle = "rgba(62,243,255,0.9)";
+      ctx.fillRect(obs.x - 4, obs.gapY - 2, obs.width + 8, 4);
+      ctx.fillRect(obs.x - 4, obs.gapY + obs.gap - 2, obs.width + 8, 4);
+    }
+
+    function drawVegasBlock(x, y, w, h, type, upsideDown) {
+      const blockGrad = ctx.createLinearGradient(0, y, 0, y + h);
+      blockGrad.addColorStop(0, "#341a6f");
+      blockGrad.addColorStop(1, "#1c0e3f");
+      ctx.fillStyle = blockGrad;
+      ctx.fillRect(x, y, w, h);
+
+      if (h < 20) return;
+
+      const neon = type === "slot" ? "#ffcb3d" : type === "sign" ? "#ff3ea5" : "#43f2ff";
+      ctx.strokeStyle = neon;
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x + 4, y + 4, w - 8, h - 8);
+
+      ctx.fillStyle = "rgba(255,255,255,0.22)";
+      const rows = Math.max(2, Math.floor(h / 26));
+      for (let r = 0; r < rows; r++) {
+        const yy = y + 10 + r * 22;
+        ctx.fillRect(x + 10, yy, w - 20, 3);
+      }
+
+      ctx.fillStyle = neon;
+      ctx.font = "bold 13px Trebuchet MS";
+      const label = type === "slot" ? "777" : type === "sign" ? "SHOW" : "JET";
+      ctx.save();
+      if (upsideDown) {
+        ctx.translate(x + w / 2, y + h - 18);
+        ctx.rotate(Math.PI);
+        ctx.fillText(label, -14, 0);
+      } else {
+        ctx.fillText(label, x + w / 2 - 14, y + 20);
+      }
+      ctx.restore();
+    }
+
+    function drawBird() {
+      ctx.save();
+      ctx.translate(bird.x, bird.y);
+      ctx.rotate(bird.tilt);
+
+      // Body
+      ctx.fillStyle = "#ffd25f";
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 24, 18, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Wing
+      ctx.fillStyle = "#ffb746";
+      ctx.beginPath();
+      ctx.ellipse(-3, 3, 11, 7, Math.sin(elapsed * 22) * 0.35, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Eye
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(9, -4, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#1f1f1f";
+      ctx.beginPath();
+      ctx.arc(10.5, -4, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Beak
+      ctx.fillStyle = "#ff7e39";
+      ctx.beginPath();
+      ctx.moveTo(22, 0);
+      ctx.lineTo(35, 4);
+      ctx.lineTo(22, 8);
+      ctx.closePath();
+      ctx.fill();
+
+      // Cowboy hat (brim + crown + band)
+      ctx.fillStyle = "#6e3b1f";
+      ctx.beginPath();
+      ctx.ellipse(0, -19, 22, 6, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "#8f4f2a";
+      ctx.beginPath();
+      ctx.moveTo(-11, -19);
+      ctx.quadraticCurveTo(-7, -36, 0, -35);
+      ctx.quadraticCurveTo(7, -36, 11, -19);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = "#ffd25f";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-8, -23);
+      ctx.lineTo(8, -23);
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    function draw() {
+      drawBackground();
+      for (const obs of obstacles) drawObstacle(obs);
+      drawBird();
+    }
+
+    let lastTime = performance.now();
+
+    function loop(now) {
+      const dt = Math.min(0.033, (now - lastTime) / 1000);
+      lastTime = now;
+
+      update(dt);
+      draw();
+
+      requestAnimationFrame(loop);
+    }
+
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "Space") {
+        e.preventDefault();
+        flap();
+      }
+    });
+
+    canvas.addEventListener("pointerdown", flap);
+
+    resetGame();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
